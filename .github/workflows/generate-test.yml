@@ -28,7 +28,6 @@ jobs:
     - name: Get changed files
       id: changed-files
       run: |
-        # Get list of changed Java files from the last commit
         FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep "^src/main/java/.*\.java$" || true)
         echo "Changed Java files:"
         echo "$FILES"
@@ -37,32 +36,32 @@ jobs:
     - name: Generate tests for changed files
       if: steps.changed-files.outputs.files != ''
       run: |
-        # Read the list of changed files
         IFS=$'\n'
         for file in ${{ steps.changed-files.outputs.files }}; do
           echo "Generating tests for: $file"
-          python - <<EOF
+          python - << 'EOL'
 import requests
 import sys
+import os
 
 def create_test_pr(file_path):
     print(f"Creating PR with tests for: {file_path}")
     
     data = {
         "file_path": file_path,
-        "base_branch": "${{ github.ref_name }}"
+        "base_branch": os.environ["GITHUB_REF_NAME"]
     }
 
     try:
         response = requests.post(
-                '${{ secrets.TEST_GENERATOR_URL }}/api/create-pr-from-path',
-                json=data,
-                headers={
-                    'Authorization': 'Bearer ${{ secrets.API_TOKEN }}',
-                    'X-GitHub-Repository': '${{ github.repository }}',
-                    'X-GitHub-Sha': '${{ github.sha }}'
-                }
-            )
+            os.environ["TEST_GENERATOR_URL"] + "/api/create-pr-from-path",
+            json=data,
+            headers={
+                "Authorization": f"Bearer {os.environ['API_TOKEN']}",
+                "X-GitHub-Repository": os.environ["GITHUB_REPOSITORY"],
+                "X-GitHub-Sha": os.environ["GITHUB_SHA"]
+            }
+        )
         print(f"Response status: {response.status_code}")
         
         if response.status_code == 200:
@@ -76,6 +75,13 @@ def create_test_pr(file_path):
         print(f"Error creating PR: {e}")
         sys.exit(1)
 
-create_test_pr("$file")
-EOF
+create_test_pr(os.environ["CURRENT_FILE"])
+EOL
+          export CURRENT_FILE="$file"
+          export GITHUB_REF_NAME="${{ github.ref_name }}"
+          export TEST_GENERATOR_URL="${{ secrets.TEST_GENERATOR_URL }}"
+          export API_TOKEN="${{ secrets.API_TOKEN }}"
+          export GITHUB_REPOSITORY="${{ github.repository }}"
+          export GITHUB_SHA="${{ github.sha }}"
+          python - < /dev/stdin
         done
