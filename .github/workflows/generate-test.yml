@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # Need at least 2 commits for comparison
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -26,59 +28,86 @@ jobs:
 
       - name: Generate tests
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
           TEST_GENERATOR_URL: ${{ secrets.TEST_GENERATOR_URL }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
-          # Write the Python script to a file
           cat > test_generator.py << 'EOF'
           import requests
-          import sys
           import os
-          
+          import subprocess
+          import sys
+
+          def get_changed_java_files():
+              try:
+                  result = subprocess.run(
+                      ['git', 'diff', '--name-only', 'HEAD~1', 'HEAD'],
+                      capture_output=True,
+                      text=True,
+                      check=True
+                  )
+                  
+                  files = result.stdout.splitlines()
+                  return [f for f in files if f.startswith('src/main/java/') 
+                          and f.endswith('.java')
+                          and not f.endswith('Test.java')]
+                          
+              except subprocess.CalledProcessError as e:
+                  print(f"Error getting changed files: {e}")
+                  print(f"Error output: {e.stderr}")
+                  return []
+
           def create_test_pr(file_path):
+              print(f"Creating PR with tests for: {file_path}")
+              
               data = {
                   "file_path": file_path,
                   "base_branch": "main"
               }
               
+              headers = {
+                  "Authorization": f"Bearer {os.environ['API_TOKEN']}",
+                  "X-GitHub-Repository": os.environ['GITHUB_REPOSITORY'],
+                  "X-GitHub-Sha": os.environ['GITHUB_SHA']
+              }
+              
               try:
                   response = requests.post(
-                      os.environ['TEST_GENERATOR_URL'] + '/api/create-pr-from-path',
+                      f"{os.environ['TEST_GENERATOR_URL']}/api/create-pr-from-path",
                       json=data,
-                      headers={
-                          'Authorization': f"Bearer {os.environ['API_TOKEN']}",
-                          'X-GitHub-Repository': os.environ['GITHUB_REPOSITORY'],
-                          'X-GitHub-Sha': os.environ['GITHUB_SHA']
-                      }
+                      headers=headers
                   )
                   
+                  print(f"Response status: {response.status_code}")
                   if response.status_code == 200:
                       result = response.json()
-                      print(f"Created PR: {result['pr_url']}")
+                      print(f"Successfully created PR: {result['pr_url']}")
                   else:
                       print(f"Error: {response.text}")
                       sys.exit(1)
+                      
               except Exception as e:
-                  print(f"Error: {str(e)}")
+                  print(f"Error creating PR: {e}")
                   sys.exit(1)
-          
-          if __name__ == '__main__':
-              if len(sys.argv) != 2:
-                  print("Usage: python test_generator.py <file_path>")
-                  sys.exit(1)
-              create_test_pr(sys.argv[1])
+
+          def main():
+              changed_files = get_changed_java_files()
+              
+              if not changed_files:
+                  print("No relevant Java files changed in the last commit")
+                  return
+              
+              print("\nFound changed Java files:")
+              for file in changed_files:
+                  print(f"- {file}")
+              
+              print("\nProcessing files...")
+              for file in changed_files:
+                  create_test_pr(file)
+
+          if __name__ == "__main__":
+              main()
           EOF
-          
-          # Find changed Java files
-          FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep "^src/main/java/.*\.java$" || true)
-          
-          # Generate tests for each file
-          if [ ! -z "$FILES" ]; then
-            while IFS= read -r file; do
-              if [ ! -z "$file" ]; then
-                echo "Generating tests for: $file"
-                python test_generator.py "$file"
-              fi
-            done <<< "$FILES"
-          fi
+
+          python test_generator.py
