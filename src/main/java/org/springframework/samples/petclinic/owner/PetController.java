@@ -69,14 +69,14 @@ class PetController {
 	public Pet findPet(@PathVariable("ownerId") int ownerId,
 			@PathVariable(name = "petId", required = false) Integer petId) {
 
-		// if (petId == null) {
-		// 	return new Pet();
-		// 	// Thats odd code, we should return null, but we are creating a new pet
-		// }
-		
 		if (petId == null) {
-			throw new IllegalArgumentException("Pet ID is required");
+			return new Pet();
+		
 		}
+		
+		// if (petId == null) {
+		// 	throw new IllegalArgumentException("Pet ID is required");
+		// }
 
 		Optional<Owner> optionalOwner = this.owners.findById(ownerId);
 		Owner owner = optionalOwner.orElseThrow(() -> new IllegalArgumentException(
