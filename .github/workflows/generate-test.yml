@@ -4,84 +4,81 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/main/java/**/*.java'  # Only trigger on Java file changes in main source
-      - '!src/main/java/**/*Test.java'  # Ignore test files
-      - '!src/test/**'  # Ignore files in test directory
+      - 'src/main/java/**/*.java'
+      - '!src/main/java/**/*Test.java'
+      - '!src/test/**'
 
 jobs:
   generate-tests:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests
+      - uses: actions/checkout@v3
 
-    - name: Get changed files
-      id: changed-files
-      run: |
-        FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep "^src/main/java/.*\.java$" || true)
-        echo "Changed Java files:"
-        echo "$FILES"
-        echo "files=$FILES" >> $GITHUB_OUTPUT
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
 
-    - name: Generate tests for changed files
-      if: steps.changed-files.outputs.files != ''
-      run: |
-        IFS=$'\n'
-        for file in ${{ steps.changed-files.outputs.files }}; do
-          echo "Generating tests for: $file"
-          python - << 'EOL'
-import requests
-import sys
-import os
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
-def create_test_pr(file_path):
-    print(f"Creating PR with tests for: {file_path}")
-    
-    data = {
-        "file_path": file_path,
-        "base_branch": os.environ["GITHUB_REF_NAME"]
-    }
-
-    try:
-        response = requests.post(
-            os.environ["TEST_GENERATOR_URL"] + "/api/create-pr-from-path",
-            json=data,
-            headers={
-                "Authorization": f"Bearer {os.environ['API_TOKEN']}",
-                "X-GitHub-Repository": os.environ["GITHUB_REPOSITORY"],
-                "X-GitHub-Sha": os.environ["GITHUB_SHA"]
-            }
-        )
-        print(f"Response status: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            print(f"Successfully created PR: {result['pr_url']}")
-        else:
-            print(f"Error: {response.text}")
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f"Error creating PR: {e}")
-        sys.exit(1)
-
-create_test_pr(os.environ["CURRENT_FILE"])
-EOL
-          export CURRENT_FILE="$file"
-          export GITHUB_REF_NAME="${{ github.ref_name }}"
-          export TEST_GENERATOR_URL="${{ secrets.TEST_GENERATOR_URL }}"
-          export API_TOKEN="${{ secrets.API_TOKEN }}"
-          export GITHUB_REPOSITORY="${{ github.repository }}"
-          export GITHUB_SHA="${{ github.sha }}"
-          python - < /dev/stdin
-        done
+      - name: Generate tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          TEST_GENERATOR_URL: ${{ secrets.TEST_GENERATOR_URL }}
+        run: |
+          # Write the Python script to a file
+          cat > test_generator.py << 'EOF'
+          import requests
+          import sys
+          import os
+          
+          def create_test_pr(file_path):
+              data = {
+                  "file_path": file_path,
+                  "base_branch": "main"
+              }
+              
+              try:
+                  response = requests.post(
+                      os.environ['TEST_GENERATOR_URL'] + '/api/create-pr-from-path',
+                      json=data,
+                      headers={
+                          'Authorization': f"Bearer {os.environ['API_TOKEN']}",
+                          'X-GitHub-Repository': os.environ['GITHUB_REPOSITORY'],
+                          'X-GitHub-Sha': os.environ['GITHUB_SHA']
+                      }
+                  )
+                  
+                  if response.status_code == 200:
+                      result = response.json()
+                      print(f"Created PR: {result['pr_url']}")
+                  else:
+                      print(f"Error: {response.text}")
+                      sys.exit(1)
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  sys.exit(1)
+          
+          if __name__ == '__main__':
+              if len(sys.argv) != 2:
+                  print("Usage: python test_generator.py <file_path>")
+                  sys.exit(1)
+              create_test_pr(sys.argv[1])
+          EOF
+          
+          # Find changed Java files
+          FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep "^src/main/java/.*\.java$" || true)
+          
+          # Generate tests for each file
+          if [ ! -z "$FILES" ]; then
+            while IFS= read -r file; do
+              if [ ! -z "$file" ]; then
+                echo "Generating tests for: $file"
+                python test_generator.py "$file"
+              fi
+            done <<< "$FILES"
+          fi
